@@ -1,0 +1,7 @@
+requests==2.32.3
+unicodedata2==15.1.0
+simpleaudio==1.0.4
+openai==1.45.0
+python-dotenv==1.0.1
+fastapi==0.115.6
+uvicorn==0.34.0
