@@ -92,9 +92,15 @@ def consulta_ia(pregunta_usuario):
 
     prompt = f"""
     Responde en formato JSON con las claves:
-    - "explicacion": explicación concisa (máximo 3 frases).
-    - "luces_a_encender": lista de partes del sistema respiratorio relevantes.
-
+    - "explicacion": Explicación clara y breve (máx 3 frases). 
+      Debe incluir una breve descripción de la enfermedad o función, 
+      y al final mencionar explícitamente qué partes del sistema respiratorio 
+      se muestran en la maqueta.
+    - "luces_a_encender": lista de partes del sistema respiratorio relevantes 
+      (usa estas claves exactas: {list(ZONAS_LUCES.keys())}).
+    - Si la pregunta NO trata del sistema respiratorio, responde:
+      "explicacion": "Esa no es una pregunta sobre el sistema respiratorio."
+      "luces_a_encender": []
     Pregunta del usuario: {pregunta_normalizada}
     """
 
@@ -102,47 +108,43 @@ def consulta_ia(pregunta_usuario):
         respuesta_api = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "Eres un asistente de biología que responde de forma clara y breve."},
+                {"role": "system", "content": "Eres un asistente de biología que responde solo sobre el sistema respiratorio."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
         )
 
-        respuesta_ia_str = respuesta_api.choices[0].message.content
-        respuesta_json = json.loads(respuesta_ia_str)
+        respuesta_json = json.loads(respuesta_api.choices[0].message.content)
 
         explicacion = respuesta_json.get("explicacion", "No se pudo obtener explicación.")
         luces_a_encender = respuesta_json.get("luces_a_encender", [])
 
-        # 🟢 Añadir referencia clara a la maqueta
+        # 🟢 Ajustar para mencionar explícitamente la maqueta
         if luces_a_encender:
-            partes = ", ".join(luces_a_encender)
-            explicacion += f" En la maqueta se muestran: {partes}."
+            partes = ", ".join(luces_a_encender[:-1]) + " y " + luces_a_encender[-1] if len(luces_a_encender) > 1 else luces_a_encender[0]
+            explicacion += f" En la maqueta se están mostrando {partes}."
 
         print("\n🤖 Respuesta de la IA:")
         print(f"Explicación: {explicacion}")
         print(f"Luces sugeridas: {luces_a_encender}")
 
-        # Control de LEDs si hay conexión
-        if ESP32_CONECTADO:
-            todas_las_zonas = list(ZONAS_LUCES.keys())
-            if sorted(luces_a_encender) == sorted(todas_las_zonas):
+        # Control de LEDs
+        if ESP32_CONECTADO and luces_a_encender:
+            todas = list(ZONAS_LUCES.keys())
+            if sorted(luces_a_encender) == sorted(todas):
                 try:
-                    url_flujo = f"http://{ESP32_IP}/flujo"
-                    requests.get(url_flujo, timeout=3)
+                    requests.get(f"http://{ESP32_IP}/flujo", timeout=3)
                     print("[OK] Flujo de aire simulado en la maqueta")
                 except Exception as e:
                     print(f"[WARN] No se pudo ejecutar flujo: {e}")
             else:
-                # Apagar todas antes
                 for zona in ZONAS_LUCES.keys():
                     controlar_led(zona, "off")
-                # Encender solo las necesarias
                 for luz in luces_a_encender:
                     if luz in ZONAS_LUCES:
                         controlar_led(luz, "on")
-        else:
-            print("[INFO] ESP32 no disponible. Solo se muestra la explicación.")
+        elif not luces_a_encender:
+            print("[INFO] Pregunta fuera del sistema respiratorio. No se encienden LEDs.")
 
         hablar(explicacion)
 
