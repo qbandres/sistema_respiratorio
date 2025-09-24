@@ -1,12 +1,11 @@
 import requests
 import unicodedata
 import json
-import simpleaudio as sa
 from openai import OpenAI
 import os
 import tempfile
 from dotenv import load_dotenv
-from pydub import AudioSegment  # 👈 Para convertir MP3 → WAV
+from playsound import playsound  # 👈 Solo playsound, más simple
 
 # ⚡ Cargar variables de entorno desde .env
 load_dotenv()
@@ -33,9 +32,9 @@ ZONAS_LUCES = {
 ESP32_CONECTADO = True
 
 
-# 🔊 Voz con simpleaudio + pydub
+# 🔊 Voz con playsound (MP3 directo)
 def hablar(texto):
-    """Convierte texto en voz, convierte MP3 → WAV y lo reproduce"""
+    """Convierte texto en voz con OpenAI y lo reproduce con playsound"""
     try:
         respuesta_audio = client.audio.speech.create(
             model="gpt-4o-mini-tts",
@@ -48,14 +47,8 @@ def hablar(texto):
             f.write(respuesta_audio.read())
             ruta_mp3 = f.name
 
-        # Convertir a WAV
-        ruta_wav = ruta_mp3.replace(".mp3", ".wav")
-        AudioSegment.from_mp3(ruta_mp3).export(ruta_wav, format="wav")
-
-        # Reproducir con simpleaudio
-        wave_obj = sa.WaveObject.from_wave_file(ruta_wav)
-        play_obj = wave_obj.play()
-        play_obj.wait_done()
+        # Reproducir
+        playsound(ruta_mp3)
 
     except Exception as e:
         print(f"[WARN] Voz no disponible: {e}")
@@ -99,7 +92,7 @@ def consulta_ia(pregunta_usuario):
 
     prompt = f"""
     Responde en formato JSON con las claves:
-    - "explicacion": explicación clara de la respuesta.
+    - "explicacion": explicación concisa (máximo 3 frases).
     - "luces_a_encender": lista de partes del sistema respiratorio relevantes.
 
     Pregunta del usuario: {pregunta_normalizada}
@@ -109,7 +102,7 @@ def consulta_ia(pregunta_usuario):
         respuesta_api = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": "You are a helpful biology assistant."},
+                {"role": "system", "content": "Eres un asistente de biología que responde de forma clara y breve."},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"}
@@ -121,8 +114,10 @@ def consulta_ia(pregunta_usuario):
         explicacion = respuesta_json.get("explicacion", "No se pudo obtener explicación.")
         luces_a_encender = respuesta_json.get("luces_a_encender", [])
 
-        if luces_a_encender and "En la maqueta se visualizan las partes indicadas." not in explicacion:
-            explicacion += " En la maqueta se visualizan las partes indicadas."
+        # 🟢 Añadir referencia clara a la maqueta
+        if luces_a_encender:
+            partes = ", ".join(luces_a_encender)
+            explicacion += f" En la maqueta se muestran: {partes}."
 
         print("\n🤖 Respuesta de la IA:")
         print(f"Explicación: {explicacion}")
