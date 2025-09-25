@@ -1,13 +1,4 @@
-#include <WiFi.h>
-#include <WebServer.h>
-#include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
-
-// ⚡ Lista de WiFi
-const char* ssidList[]     = {"TANGUISNET", "Claro_QP"};
-const char* passwordList[] = {"IA2025@ft",  "Lucia_21"};
-const int numNetworks = 2;
+#include <Arduino.h>
 
 // ⚡ Pines de LEDs
 #define LED_FOSAS         12
@@ -19,64 +10,15 @@ const int numNetworks = 2;
 #define LED_PULMON_SANO   17
 #define LED_PULMON_ENFER  26
 
-WebServer server(80);
-
-// ⚡ OLED
-#define ANCHO 128
-#define ALTO 64
-Adafruit_SSD1306 display(ANCHO, ALTO, &Wire, -1);
-
 // ⚡ Variables
 bool parpadeoActivo = false;
 int zonasParpadeo[8];
 int numZonasParpadeo = 0;
 
 // ============================
-// 🚀 Intento de conexión WiFi
+// 🚦 Control de LEDs
 // ============================
-bool connectWiFi() {
-  for (int i = 0; i < numNetworks; i++) {
-    Serial.printf("🔎 Intentando conectar a %s...\n", ssidList[i]);
-    WiFi.begin(ssidList[i], passwordList[i]);
-
-    unsigned long startAttempt = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - startAttempt < 8000) {
-      delay(500);
-      Serial.print(".");
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-      String ip = WiFi.localIP().toString();
-      Serial.printf("\n✅ Conectado a %s, IP: %s\n", ssidList[i], ip.c_str());
-
-      // Mostrar en OLED
-      display.clearDisplay();
-      display.setTextSize(1);
-      display.setTextColor(SSD1306_WHITE);
-      display.setCursor(0, 0);
-      display.println("WiFi conectado:");
-      display.println(ssidList[i]);
-      display.println("IP:");
-      display.println(ip);
-      display.display();
-
-      return true;
-    }
-    Serial.println("\n❌ Falló la conexión, probando siguiente...");
-  }
-  return false;
-}
-
-// ============================
-// Handlers (igual que antes)
-// ============================
-void handleControl() {
-  if (!server.hasArg("zona") || !server.hasArg("accion")) {
-    server.send(400, "text/plain", "Faltan parámetros");
-    return;
-  }
-  String zona = server.arg("zona");
-  String accion = server.arg("accion");
+void controlarLed(String zona, String accion) {
   int pin = -1;
 
   if (zona == "fosas_nasales") pin = LED_FOSAS;
@@ -89,93 +31,103 @@ void handleControl() {
   else if (zona == "pulmon_enfermo") pin = LED_PULMON_ENFER;
 
   if (pin == -1) {
-    server.send(400, "text/plain", "Zona no reconocida");
+    Serial.println("Zona no reconocida");
     return;
   }
 
   if (accion == "on") {
     zonasParpadeo[numZonasParpadeo++] = pin;
     parpadeoActivo = true;
-    server.send(200, "text/plain", zona + " encendido");
+    Serial.println(zona + " encendido");
   } else if (accion == "off") {
     digitalWrite(pin, LOW);
-    numZonasParpadeo = 0;
     parpadeoActivo = false;
-    server.send(200, "text/plain", zona + " apagado");
+    numZonasParpadeo = 0;
+    Serial.println(zona + " apagado");
   } else {
-    server.send(400, "text/plain", "Accion no valida");
+    Serial.println("Accion no valida");
   }
-}
-
-void handleOnAll() {
-  int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
-  for (int i=0;i<8;i++) zonasParpadeo[i] = leds[i];
-  numZonasParpadeo = 8;
-  parpadeoActivo = true;
-  server.send(200, "text/plain", "Todas las zonas encendidas");
-}
-
-void handleOffAll() {
-  int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
-  for (int i=0;i<8;i++) digitalWrite(leds[i], LOW);
-  numZonasParpadeo = 0;
-  parpadeoActivo = false;
-  server.send(200, "text/plain", "Todas las zonas apagadas");
-}
-
-void handleFlujo() {
-  int flujo[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS};
-  int pasos = sizeof(flujo)/sizeof(flujo[0]);
-  handleOffAll();
-  for (int ciclo=0;ciclo<3;ciclo++) {
-    for (int i=0;i<pasos;i++) { digitalWrite(flujo[i], HIGH); delay(500); }
-    delay(1000);
-    for (int i=pasos-1;i>=0;i--) { digitalWrite(flujo[i], LOW); delay(500); }
-  }
-  server.send(200, "text/plain", "Flujo de aire simulado");
 }
 
 // ============================
-// Setup y Loop
+// 🚦 Flujo respiratorio
+// ============================
+void flujo() {
+  int flujo[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS};
+  int pasos = sizeof(flujo) / sizeof(flujo[0]);
+
+  // Apagar todo primero
+  int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
+  for (int i=0;i<8;i++) digitalWrite(leds[i], LOW);
+
+  for (int ciclo=0; ciclo<3; ciclo++) {
+    for (int i=0; i<pasos; i++) {
+      digitalWrite(flujo[i], HIGH);
+      delay(500);
+    }
+    delay(1000);
+    for (int i=pasos-1; i>=0; i--) {
+      digitalWrite(flujo[i], LOW);
+      delay(500);
+    }
+  }
+  Serial.println("Flujo de aire simulado");
+}
+
+// ============================
+// Setup
 // ============================
 void setup() {
   Serial.begin(115200);
-
-  // Inicia OLED
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("⚠️ No se detecta OLED en 0x3C");
-    for(;;);
-  }
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("Iniciando...");
-  display.display();
-
   int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
   for (int i=0;i<8;i++) pinMode(leds[i], OUTPUT);
 
-  if (!connectWiFi()) {
-    display.clearDisplay();
-    display.setCursor(0, 0);
-    display.println("WiFi fallo!");
-    display.display();
-  }
-
-  server.on("/control", handleControl);
-  server.on("/all/on", handleOnAll);
-  server.on("/all/off", handleOffAll);
-  server.on("/flujo", handleFlujo);
-  server.begin();
+  Serial.println("ESP32 listo para recibir comandos por USB Serial");
 }
 
+// ============================
+// Loop
+// ============================
 void loop() {
-  server.handleClient();
+  // Leer comandos desde Python
+  if (Serial.available()) {
+    String input = Serial.readStringUntil('\n');
+    input.trim();
+
+    if (input.startsWith("control")) {
+      int espacio1 = input.indexOf(' ');
+      int espacio2 = input.indexOf(' ', espacio1 + 1);
+      String zona = input.substring(espacio1 + 1, espacio2);
+      String accion = input.substring(espacio2 + 1);
+      controlarLed(zona, accion);
+
+    } else if (input == "all on") {
+      int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
+      for (int i=0;i<8;i++) zonasParpadeo[i] = leds[i];
+      numZonasParpadeo = 8;
+      parpadeoActivo = true;
+      Serial.println("Todas las zonas encendidas");
+
+    } else if (input == "all off") {
+      int leds[] = {LED_FOSAS, LED_LARINGE, LED_TRAQUEA, LED_BRONQUIOS, LED_BRONQUIOLOS, LED_ALVEOLOS, LED_PULMON_SANO, LED_PULMON_ENFER};
+      for (int i=0;i<8;i++) digitalWrite(leds[i], LOW);
+      parpadeoActivo = false;
+      numZonasParpadeo = 0;
+      Serial.println("Todas las zonas apagadas");
+
+    } else if (input == "flujo") {
+      flujo();
+
+    } else {
+      Serial.println("Comando no valido");
+    }
+  }
+
+  // 🔄 Parpadeo automático si hay varias zonas activas
   if (parpadeoActivo && numZonasParpadeo > 0) {
-    for (int i=0;i<numZonasParpadeo;i++) digitalWrite(zonasParpadeo[i], HIGH);
+    for (int i=0; i<numZonasParpadeo; i++) digitalWrite(zonasParpadeo[i], HIGH);
     delay(2000);
-    for (int i=0;i<numZonasParpadeo;i++) digitalWrite(zonasParpadeo[i], LOW);
+    for (int i=0; i<numZonasParpadeo; i++) digitalWrite(zonasParpadeo[i], LOW);
     delay(2000);
   }
 }

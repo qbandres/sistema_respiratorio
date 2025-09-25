@@ -1,23 +1,22 @@
-import requests
+import serial
+import serial.tools.list_ports
 import unicodedata
 import json
 from openai import OpenAI
 import os
 import tempfile
 from dotenv import load_dotenv
-from playsound import playsound  # 👈 Solo playsound, más simple
+from playsound import playsound
 
-# ⚡ Cargar variables de entorno desde .env
+# ⚡ Cargar variables de entorno
 load_dotenv()
-
-# ⚡ Configuración desde .env
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ESP32_IP = os.getenv("ESP32_IP")
+BAUDRATE = 115200
 
 # Cliente OpenAI
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# ⚡ Diccionario para mapear zonas a LEDs del ESP32
+# ⚡ Diccionario de LEDs
 ZONAS_LUCES = {
     "fosas_nasales": "fosas_nasales",
     "laringe_faringe": "laringe_faringe",
@@ -29,11 +28,23 @@ ZONAS_LUCES = {
     "pulmon_enfermo": "pulmon_enfermo"
 }
 
-# Bandera global para conexión con ESP32
-ESP32_CONECTADO = True
+# 🔎 Autodetectar puerto ESP32
+def autodetectar_esp32():
+    puertos = serial.tools.list_ports.comports()
+    for puerto in puertos:
+        if "USB" in puerto.device or "usbserial" in puerto.device.lower() or "COM" in puerto.device:
+            print(f"[INFO] ESP32 detectado en {puerto.device}")
+            return puerto.device
+    raise Exception("⚠️ No se detectó ESP32. Conéctalo por USB y vuelve a intentar.")
 
+# 📡 Conexión Serial (autodetección al inicio)
+try:
+    ESP32_PORT = autodetectar_esp32()
+    ser = serial.Serial(ESP32_PORT, BAUDRATE, timeout=1)
+except Exception as e:
+    print(f"[ERROR] No se pudo abrir conexión serial: {e}")
+    exit(1)
 
-# 🔊 Voz con playsound (MP3 directo)
 def hablar(texto):
     """Convierte texto en voz con OpenAI y lo reproduce con playsound"""
     try:
@@ -61,29 +72,14 @@ def hablar(texto):
         print(f"[WARN] Voz no disponible: {e}")
 
 
-# 💡 Control de LEDs vía ESP32
+# 💡 Control de LEDs vía Serial
 def controlar_led(zona, accion):
-    """Enciende o apaga un LED del ESP32"""
-    global ESP32_CONECTADO
-    if not ESP32_CONECTADO:
-        return
-
-    nombre_luz_esp32 = ZONAS_LUCES.get(zona)
-    if not nombre_luz_esp32:
-        return
-
-    url = f"http://{ESP32_IP}/control?zona={nombre_luz_esp32}&accion={accion}"
-    try:
-        requests.get(url, timeout=2)
-        print(f"[OK] {zona} -> {accion}")
-    except Exception as e:
-        print(f"[WARN] No se pudo comunicar con el ESP32 ({zona}): {e}")
-        ESP32_CONECTADO = False
-
+    comando = f"control {zona} {accion}\n"
+    ser.write(comando.encode())
+    print(f"[OK] {zona} -> {accion}")
 
 # 🔠 Normalizar texto
 def normalizar(texto):
-    """Quita tildes y convierte a minúsculas"""
     if not isinstance(texto, str):
         return ""
     return ''.join(
@@ -91,26 +87,39 @@ def normalizar(texto):
         if unicodedata.category(c) != 'Mn'
     ).lower()
 
-
 # 🤖 Consulta IA
-def consulta_ia(pregunta_usuario):
-    """Consulta a la IA y controla la maqueta"""
-    pregunta_normalizada = normalizar(pregunta_usuario)
+def consulta_ia(pregunta):
+    pregunta_n = normalizar(pregunta)
 
+    # 👉 Prompt claro y restringido
     prompt = f"""
     Responde en formato JSON con las claves:
-    - "explicacion": Explicación clara y breve (máx 3 frases). 
-      Debe incluir una breve descripción de la enfermedad o función.
-    - "luces_a_encender": lista de partes del sistema respiratorio relevantes 
-      (usa estas claves exactas: {list(ZONAS_LUCES.keys())}).
-    - Si la pregunta NO trata del sistema respiratorio, responde:
-      "explicacion": "Esa no es una pregunta sobre el sistema respiratorio."
-      "luces_a_encender": []
-    Pregunta del usuario: {pregunta_normalizada}
-    """
+    - "explicacion": Explicación clara y breve (máx 2 frases).
+    - "luces_a_encender": lista de las partes del sistema respiratorio a encender.
+
+    ⚠️ IMPORTANTE: Solo puedes usar exactamente estas claves y nada más:
+    fosas_nasales, laringe_faringe, traquea, bronquios, bronquiolos, alveolos, pulmon_sano, pulmon_enfermo.
+
+    Reglas:
+    - Si la pregunta se refiere a enfermedades, síntomas, condiciones respiratorias 
+    (ej: covid, neumonía, asma, alergia, gripe, bronquitis, enfisema, etc.),
+    o menciona **vacunas, virus o tratamientos asociados al sistema respiratorio**, 
+    **sí debes responder** como parte del sistema.
+    Usa "pulmon_enfermo" y agrega las zonas afectadas si aplica (ej: alveolos en COVID).
+    - Si la pregunta se refiere al ciclo de la respiracion, responde con:
+    "explicacion": breve explicación del ciclo
+    "luces_a_encender": ["fosas_nasales", "laringe_faringe", "traquea", "bronquios", "bronquiolos", "alveolos"]
+    ⚠️ Además, se debe activar la animación especial "flujo" en el ESP32.
+    - Si la pregunta NO trata del sistema respiratorio (ej: autos, política, cocina), responde:
+    "explicacion": "Esa no es una pregunta sobre el sistema respiratorio."
+    "luces_a_encender": []
+
+    Pregunta del usuario: {pregunta_n}
+"""
 
     try:
-        respuesta_api = client.chat.completions.create(
+        # 👉 Llamada a OpenAI
+        r = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
                 {"role": "system", "content": "Eres un asistente de biología que responde solo sobre el sistema respiratorio."},
@@ -119,62 +128,48 @@ def consulta_ia(pregunta_usuario):
             response_format={"type": "json_object"}
         )
 
-        respuesta_json = json.loads(respuesta_api.choices[0].message.content)
+        # 👉 Procesar JSON
+        data = json.loads(r.choices[0].message.content)
+        explicacion = data.get("explicacion", "No se pudo obtener explicación.")
+        luces = data.get("luces_a_encender", [])
 
-        explicacion = respuesta_json.get("explicacion", "No se pudo obtener explicación.")
-        luces_a_encender = respuesta_json.get("luces_a_encender", [])
+        # 🚦 Caso especial: ciclo de la respiración
+        if "ciclo" in pregunta_n and "respiracion" in pregunta_n:
+            ser.write(b"flujo\n")  # 👉 activa animación en ESP32
+            print("[OK] Animación del ciclo de la respiración activada")
 
-        # 🔎 Detección especial: ciclo de la respiración
-        if "ciclo" in pregunta_normalizada and "respiracion" in pregunta_normalizada:
-            try:
-                requests.get(f"http://{ESP32_IP}/flujo", timeout=3)
-                print("[OK] Animación del ciclo de la respiración activada")
+        # ✨ Agregar referencia a la maqueta si hay luces encendidas
+        if luces:
+            partes_mostradas = ", ".join(luces).replace("_", " ")
+            explicacion += f" En la maqueta se está mostrando: {partes_mostradas}."
 
-                # Forzar las luces solo a las zonas válidas
-                luces_a_encender = [
-                    "fosas_nasales", "laringe_faringe", "traquea",
-                    "bronquios", "bronquiolos", "alveolos"
-                ]
-            except Exception as e:
-                print(f"[WARN] No se pudo ejecutar ciclo respiratorio: {e}")
-
-        # 👀 Mostrar en consola
-        if luces_a_encender:
-            print(f"[INFO] Partes detectadas: {luces_a_encender}")
-
-        print("\n🤖 Respuesta de la IA:")
+        # 👉 Mostrar en consola
+        print("\n🤖 Respuesta IA:")
         print(f"Explicación: {explicacion}")
-        print(f"Luces sugeridas: {luces_a_encender}")
+        print(f"Luces: {luces}")
 
-        # 💡 Control de LEDs
-        if ESP32_CONECTADO and luces_a_encender:
-            for zona in ZONAS_LUCES.keys():
-                controlar_led(zona, "off")
-            for luz in luces_a_encender:
+        # 👉 Controlar LEDs manualmente solo si NO es ciclo
+        if not ("ciclo" in pregunta_n and "respiracion" in pregunta_n):
+            ser.write(b"all off\n")
+            for luz in luces:
                 if luz in ZONAS_LUCES:
                     controlar_led(luz, "on")
-        elif not luces_a_encender:
-            print("[INFO] Pregunta fuera del sistema respiratorio. No se encienden LEDs.")
 
-        # 🔊 Reproducir explicación en voz
+        # 🔊 Reproducir voz
         hablar(explicacion)
 
     except Exception as e:
         print(f"[ERROR] IA: {e}")
 
-
 # 🚀 Programa principal
 if __name__ == "__main__":
-    print("Sistema respiratorio con LEDs y voz natural.")
-    # Apagamos todas las luces al inicio
-    for zona in ZONAS_LUCES.keys():
-        controlar_led(zona, "off")
+    print("Sistema respiratorio con LEDs y voz natural (USB Serial).")
+    ser.write(b"all off\n")
 
     while True:
         pregunta = input("\n❓ Pregunta (o 'salir' para terminar): ")
         if pregunta.lower() == "salir":
-            for zona in ZONAS_LUCES.keys():
-                controlar_led(zona, "off")
+            ser.write(b"all off\n")
             print("¡Hasta luego!")
             break
         if not pregunta.strip():
