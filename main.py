@@ -10,11 +10,12 @@ from playsound import playsound  # 👈 Solo playsound, más simple
 # ⚡ Cargar variables de entorno desde .env
 load_dotenv()
 
-# ⚡ Configura OpenAI con la API Key desde el .env
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# ⚡ Configuración desde .env
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ESP32_IP = os.getenv("ESP32_IP")
 
-# ⚡ IP del ESP32
-ESP32_IP = "10.20.0.147"
+# Cliente OpenAI
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 # ⚡ Diccionario para mapear zonas a LEDs del ESP32
 ZONAS_LUCES = {
@@ -42,13 +43,19 @@ def hablar(texto):
             input=texto
         )
 
-        # Guardar archivo temporal MP3
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as f:
             f.write(respuesta_audio.read())
             ruta_mp3 = f.name
 
-        # Reproducir
-        playsound(ruta_mp3)
+        print(f"[INFO] Reproduciendo audio: {texto[:50]}...")
+
+        try:
+            playsound(ruta_mp3)
+        except Exception:
+            # Fallback en macOS
+            os.system(f"afplay '{ruta_mp3}'")
+
+        os.remove(ruta_mp3)  # Limpieza
 
     except Exception as e:
         print(f"[WARN] Voz no disponible: {e}")
