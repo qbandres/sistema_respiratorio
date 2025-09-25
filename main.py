@@ -100,9 +100,7 @@ def consulta_ia(pregunta_usuario):
     prompt = f"""
     Responde en formato JSON con las claves:
     - "explicacion": Explicación clara y breve (máx 3 frases). 
-      Debe incluir una breve descripción de la enfermedad o función, 
-      y al final mencionar explícitamente qué partes del sistema respiratorio 
-      se muestran en la maqueta.
+      Debe incluir una breve descripción de la enfermedad o función.
     - "luces_a_encender": lista de partes del sistema respiratorio relevantes 
       (usa estas claves exactas: {list(ZONAS_LUCES.keys())}).
     - Si la pregunta NO trata del sistema respiratorio, responde:
@@ -126,33 +124,39 @@ def consulta_ia(pregunta_usuario):
         explicacion = respuesta_json.get("explicacion", "No se pudo obtener explicación.")
         luces_a_encender = respuesta_json.get("luces_a_encender", [])
 
-        # 🟢 Ajustar para mencionar explícitamente la maqueta
+        # 🔎 Detección especial: ciclo de la respiración
+        if "ciclo" in pregunta_normalizada and "respiracion" in pregunta_normalizada:
+            try:
+                requests.get(f"http://{ESP32_IP}/flujo", timeout=3)
+                print("[OK] Animación del ciclo de la respiración activada")
+
+                # Forzar las luces solo a las zonas válidas
+                luces_a_encender = [
+                    "fosas_nasales", "laringe_faringe", "traquea",
+                    "bronquios", "bronquiolos", "alveolos"
+                ]
+            except Exception as e:
+                print(f"[WARN] No se pudo ejecutar ciclo respiratorio: {e}")
+
+        # 👀 Mostrar en consola
         if luces_a_encender:
-            partes = ", ".join(luces_a_encender[:-1]) + " y " + luces_a_encender[-1] if len(luces_a_encender) > 1 else luces_a_encender[0]
-            explicacion += f" En la maqueta se están mostrando {partes}."
+            print(f"[INFO] Partes detectadas: {luces_a_encender}")
 
         print("\n🤖 Respuesta de la IA:")
         print(f"Explicación: {explicacion}")
         print(f"Luces sugeridas: {luces_a_encender}")
 
-        # Control de LEDs
+        # 💡 Control de LEDs
         if ESP32_CONECTADO and luces_a_encender:
-            todas = list(ZONAS_LUCES.keys())
-            if sorted(luces_a_encender) == sorted(todas):
-                try:
-                    requests.get(f"http://{ESP32_IP}/flujo", timeout=3)
-                    print("[OK] Flujo de aire simulado en la maqueta")
-                except Exception as e:
-                    print(f"[WARN] No se pudo ejecutar flujo: {e}")
-            else:
-                for zona in ZONAS_LUCES.keys():
-                    controlar_led(zona, "off")
-                for luz in luces_a_encender:
-                    if luz in ZONAS_LUCES:
-                        controlar_led(luz, "on")
+            for zona in ZONAS_LUCES.keys():
+                controlar_led(zona, "off")
+            for luz in luces_a_encender:
+                if luz in ZONAS_LUCES:
+                    controlar_led(luz, "on")
         elif not luces_a_encender:
             print("[INFO] Pregunta fuera del sistema respiratorio. No se encienden LEDs.")
 
+        # 🔊 Reproducir explicación en voz
         hablar(explicacion)
 
     except Exception as e:
